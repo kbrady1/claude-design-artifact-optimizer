@@ -3,14 +3,15 @@
 Shrinks Claude Design export ZIPs so they can be uploaded. A 778 MB export
 becomes about 23 MB — roughly 97% smaller — with no visible quality loss.
 
-Ships as a drag-and-drop Mac app for designers, and as a CLI for everyone else.
-Nothing needs to be installed: it uses only `sips`, `zip`, and the system
-`python3`.
+Ships as a Mac app with a drop zone, live progress, and a save dialog — and as
+a CLI. Running it needs nothing installed: only `sips`, `zip`, and the system
+`python3`. (Building the app needs Swift; running it does not.)
 
 ## For designers
 
 See **[INSTALL.md](INSTALL.md)**. Short version: drag `Shrink Design Zip.app`
-to Applications, right-click → Open it once, then drag any design ZIP onto it.
+to Applications, right-click → Open it once, then drop any design ZIP into its
+window.
 
 ## For engineers
 
@@ -52,8 +53,25 @@ distinguishing breakage it caused from breakage already present in the export.
 |---|---|
 | `shrink-design-zip.sh` | The optimizer. Runs standalone. |
 | `build/pngquant.py` | PNG palette quantizer (see below). |
-| `build/driver.applescript` | App UI: drop handling, progress, dialogs. |
-| `build/build-app.sh` | Assembles the `.app` bundle. |
+| `app/main.swift` | SwiftUI window: drop zone, progress, save dialog. |
+| `build/build-app.sh` | Compiles the app and assembles the bundle. |
+
+### Progress protocol
+
+The UI does not parse terminal output. Setting `PROGRESS=<file>` makes the
+script append one event per line, which the app polls four times a second:
+
+```
+total <bytes>              phase <n> <of> <label>
+size  <bytes> <disk|zip>   tier  <px> <quality>
+image <i> <n>              note  <text>
+done  <exit> <path>
+```
+
+Unset (the CLI case), every emit is a no-op and terminal behavior is
+unchanged. Two details matter: the progress file must live outside the
+script's work dir, which its `EXIT` trap deletes; and `disk` and `zip` sizes
+are not comparable, so the UI displays only `zip`.
 
 ### Why pngquant.py exists
 

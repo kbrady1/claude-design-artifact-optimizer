@@ -37,6 +37,23 @@ ok()   { printf "    ${GRN}✓${RST} %s\n" "$*"; }
 warn() { printf "    ${YEL}!${RST} %s\n" "$*"; }
 die()  { printf "${RED}error:${RST} %s\n" "$*" >&2; exit 1; }
 
+# Machine-readable progress stream for a GUI front end. Set PROGRESS to a file
+# path to receive one event per line. Unset (the CLI case) makes every emit a
+# no-op, so terminal behavior is unchanged.
+#
+#   total <bytes>                 original size
+#   phase <n> <of> <label>        entering a phase
+#   size  <bytes> <disk|zip>      current size; disk and zip are NOT comparable
+#   tier  <px> <quality>          starting a recompression tier
+#   image <i> <n>                 progress within a tier
+#   note  <text>                  human-readable detail
+#   done  <exit> <path>           finished; path is the produced file
+#
+# The file must live outside $WORK: the EXIT trap deletes $WORK, which would
+# take the reader's file with it.
+PROGRESS="${PROGRESS:-}"
+emit() { [ -n "$PROGRESS" ] && printf '%s\n' "$*" >> "$PROGRESS" 2>/dev/null; return 0; }
+
 mb()      { awk -v b="$1" 'BEGIN{printf "%.1f MB", b/1048576}'; }
 dir_size(){ find "$1" -type f -print0 2>/dev/null | xargs -0 stat -f%z 2>/dev/null | awk '{s+=$1} END{printf "%d", s+0}'; }
 
@@ -85,9 +102,13 @@ OUT="$SRC_DIR/$BASE-optimized.zip"
 ORIG_BYTES=$(stat -f%z "$SRC")
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/shrinkzip.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+# One trap covers every exit path, including die(), so a GUI reader always sees
+# a terminal event instead of waiting forever.
+finish() { local rc=$?; emit "done $rc ${OUT:-}"; rm -rf "$WORK"; }
+trap finish EXIT
 TREE="$WORK/tree"; mkdir -p "$TREE"
 
+emit "total $ORIG_BYTES"
 printf "${BLD}Shrinking:${RST} %s ${DIM}(%s)${RST}\n" "$(basename "$SRC")" "$(mb "$ORIG_BYTES")"
 printf "${BLD}Target:${RST}    under %s MB\n" "$TARGET_MB"
 
@@ -226,6 +247,7 @@ PY
 fi
 
 # ------------------------------------------------- 1. remove orphans -------
+emit "phase 1 4 Removing unused images"
 step "Step 1 — Removing orphaned media"
 scan_refs > "$WORK/refs.txt"
 REF_COUNT=$(wc -l < "$WORK/refs.txt" | tr -d ' ')
@@ -238,9 +260,12 @@ while IFS= read -r -d '' f; do
 done < <(find_media)
 report_line "referenced:" "$REF_COUNT files"
 report_line "orphans removed:" "$orphans files ($(mb $orphan_bytes))"
+emit "note $orphans unused image(s) removed"
+emit "size $(dir_size "$TREE") disk"
 ok "now $(mb "$(dir_size "$TREE")") on disk"
 
 # ------------------------------------------------ 2. remove duplicates -----
+emit "phase 2 4 Removing duplicates"
 step "Step 2 — Removing duplicate media"
 # Group by md5. Keep the shortest path as canonical, delete the rest, and
 # repoint references so nothing 404s.
@@ -278,6 +303,7 @@ elif [ -s "$WORK/hashes.txt" ]; then
   # One tree walk applies every repoint at once.
   [ -s "$WORK/dupmap.txt" ] && py_rewrite_all "$WORK/dupmap.txt"
 fi
+emit "note $dupes duplicate(s) removed"
 report_line "duplicates removed:" "$dupes files ($(mb $dupe_bytes))"
 ok "now $(mb "$(dir_size "$TREE")") on disk"
 
@@ -291,7 +317,9 @@ zip_and_measure() {
 # decimal, and a file of 25.2 million bytes is "under 25 MiB" but still gets
 # rejected by a 25 MB limit.
 TARGET_BYTES=$((TARGET_MB * 1000000))
+emit "phase 3 4 Compressing"
 cur=$(zip_and_measure)
+emit "size $cur zip"
 printf "\n    zipped: ${BLD}%s${RST}\n" "$(mb "$cur")"
 if [ "$cur" -le "$TARGET_BYTES" ]; then
   cp "$WORK/out.zip" "$OUT"
@@ -301,6 +329,7 @@ if [ "$cur" -le "$TARGET_BYTES" ]; then
 fi
 
 # ------------------------------------------------- 3. shrink images --------
+emit "phase 3 4 Shrinking images"
 step "Step 3 — Shrinking images"
 say "    Still over target. Escalating quality tiers until it fits."
 
@@ -319,6 +348,9 @@ fi
 # Keep originals so each tier recompresses from full quality, never from an
 # already-compressed result (which would compound artifacts).
 ORIGS="$WORK/origs"; mkdir -p "$ORIGS"
+# Total raster count drives the per-image progress ticks in the tier loop.
+RASTER_TOTAL=0
+while IFS= read -r -d '' _f; do RASTER_TOTAL=$((RASTER_TOTAL+1)); done < <(find_raster)
 while IFS= read -r -d '' f; do
   rel="${f#$TREE/}"; mkdir -p "$ORIGS/$(dirname "$rel")"; cp "$f" "$ORIGS/$rel"
 done < <(find_raster)
@@ -326,10 +358,14 @@ done < <(find_raster)
 final_tier=""
 for tier in "${QUALITY_TIERS[@]}"; do
   px="${tier%%:*}"; q="${tier##*:}"
+  emit "tier $px $q"
   printf "\n    ${BLD}tier %spx / quality %s${RST}\n" "$px" "$q"
 
-  converted=0; kept=0
+  converted=0; kept=0; seen=0
   while IFS= read -r -d '' orig; do
+    seen=$((seen+1))
+    # Step 3 dominates the runtime, so tick often enough that the bar moves.
+    [ $((seen % 5)) -eq 0 ] && emit "image $seen $RASTER_TOTAL"
     rel="${orig#$ORIGS/}"
     live="$TREE/$rel"
     # locate current file even if a previous tier renamed .png -> .jpg
@@ -399,6 +435,7 @@ for tier in "${QUALITY_TIERS[@]}"; do
   fi
 
   cur=$(zip_and_measure)
+  emit "size $cur zip"
   printf "    recompressed %d, left alone %d → zipped ${BLD}%s${RST}\n" "$converted" "$kept" "$(mb "$cur")"
   final_tier="${px}px/q${q}"
   [ "$cur" -le "$TARGET_BYTES" ] && { ok "under target"; break; }
@@ -408,6 +445,7 @@ done
 cp "$WORK/out.zip" "$OUT"
 
 # ---------------------------------------------------- verification ---------
+emit "phase 4 4 Verifying"
 step "Verifying references"
 # The real pass condition: every image that WAS in the zip and is still
 # referenced must resolve. Names referenced but never shipped in the original

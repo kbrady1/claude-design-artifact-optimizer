@@ -30,27 +30,31 @@ developer cannot be verified"*, just click **OK** and follow the step above.
 
 ## Using it
 
-**Drag your `.zip` onto the app icon.** That is the whole thing.
+Open the app and you get a window with a drop zone.
 
-You can drop it on the icon in Applications, on the Dock icon, or on the app
-window. You can also double-click the app and pick a file.
+**Drag your `.zip` into the window**, or click **Choose File…** to pick one.
+Dropping onto the app or Dock icon works too.
 
-While it works you will see a notification. It usually takes **30 to 90
-seconds** depending on how big the export is.
-
-When it finishes you get a summary:
+While it runs the window shows live progress: which step it is on, and the
+size counting down as it shrinks.
 
 ```
-Done.
+Original                        Now
+777.8 MB          →         23.3 MB
 
-777.8 MB  →  23.3 MB   (97% smaller)
+████████████████████░░░░  Image 60 of 97
 
-Saved as:
-Topic page-optimized.zip
+✓ Removing unused images
+✓ Removing duplicates
+◌ Shrinking images
+○ Verifying
 ```
 
-Click **Show in Finder** and the new file is selected, ready to drag into
-whatever you are uploading to.
+It usually takes **30 to 90 seconds** depending on the export.
+
+When it finishes you see the before/after summary and a **Save…** button.
+Choose where to put the file — it defaults to the same folder as the original,
+so you can just press Return. Finder opens with the new file selected.
 
 ---
 

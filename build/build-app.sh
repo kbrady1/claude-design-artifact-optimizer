@@ -2,9 +2,13 @@
 #
 # build-app.sh — Assemble "Shrink Design Zip.app".
 #
-# Produces a normal double-clickable / drag-and-drop Mac app that bundles
-# shrink-design-zip.sh and pngquant.py. The app needs nothing installed: it
-# uses only sips, zip, and the system python3.
+# A SwiftUI window app: drop zone, live progress, and a save dialog. It bundles
+# shrink-design-zip.sh and pngquant.py and shells out to them, so the optimizer
+# logic lives in exactly one place.
+#
+# Building needs Swift (Xcode or the Command Line Tools). RUNNING the result
+# does not: the binary links only /usr/lib/swift and /System/Library, both
+# present on stock macOS 13+.
 #
 # Usage:  ./build/build-app.sh   (run from the repo root)
 
@@ -14,51 +18,77 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Shrink Design Zip"
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
+MIN_MACOS="13.0"
 
-[ -f "$ROOT/shrink-design-zip.sh" ] || { echo "missing shrink-design-zip.sh" >&2; exit 1; }
-[ -f "$ROOT/build/pngquant.py" ]    || { echo "missing build/pngquant.py" >&2; exit 1; }
+for f in shrink-design-zip.sh build/pngquant.py app/main.swift; do
+  [ -f "$ROOT/$f" ] || { echo "missing $f" >&2; exit 1; }
+done
+command -v swiftc >/dev/null || {
+  echo "swiftc not found. Install Xcode or run: xcode-select --install" >&2; exit 1; }
 
 mkdir -p "$DIST"
 rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# osacompile builds a real AppleScript droplet: it wires up the executable, the
-# Apple-event plumbing, and the "on open" drop handler. Hand-assembling those
-# does not produce a working drop target.
-osacompile -o "$APP" "$ROOT/build/driver.applescript"
+# ---------------------------------------------------------------- binary ----
+# Build for whichever architectures the toolchain supports so the app runs on
+# both Apple Silicon and Intel.
+ARCHS=()
+for arch in arm64 x86_64; do
+  if swiftc -O -parse-as-library -target "${arch}-apple-macos${MIN_MACOS}" \
+       -o "$DIST/.bin-$arch" "$ROOT/app/main.swift" 2>/dev/null; then
+    ARCHS+=("$DIST/.bin-$arch")
+  fi
+done
+[ ${#ARCHS[@]} -gt 0 ] || { echo "Swift build failed" >&2; exit 1; }
 
-# ------------------------------------------------------------- payload ------
+if [ ${#ARCHS[@]} -gt 1 ]; then
+  lipo -create "${ARCHS[@]}" -output "$APP/Contents/MacOS/$APP_NAME"
+else
+  cp "${ARCHS[0]}" "$APP/Contents/MacOS/$APP_NAME"
+fi
+chmod +x "$APP/Contents/MacOS/$APP_NAME"
+rm -f "$DIST"/.bin-*
+
+# --------------------------------------------------------------- payload ----
 cp "$ROOT/shrink-design-zip.sh" "$APP/Contents/Resources/shrink-design-zip.sh"
 cp "$ROOT/build/pngquant.py"    "$APP/Contents/Resources/pngquant.py"
 chmod +x "$APP/Contents/Resources/shrink-design-zip.sh"
 
 # ------------------------------------------------------------ Info.plist ----
-# Patch the plist osacompile generated: give the app a real name and identifier,
-# and declare that it accepts dropped .zip files.
-PL="$APP/Contents/Info.plist"
-pb() { /usr/libexec/PlistBuddy -c "$1" "$PL" >/dev/null 2>&1 || true; }
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key><string>$APP_NAME</string>
+  <key>CFBundleIdentifier</key><string>com.neighbor.shrinkdesignzip</string>
+  <key>CFBundleVersion</key><string>2.0</string>
+  <key>CFBundleShortVersionString</key><string>2.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>$APP_NAME</string>
+  <key>CFBundleIconFile</key><string>app</string>
+  <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>ZIP archive</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.zip-archive</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>
+PLIST
 
-# osacompile names the executable "droplet", which is what shows in the menu bar
-# and in Force Quit. Rename it so the user sees the app's real name.
-if [ -f "$APP/Contents/MacOS/droplet" ]; then
-  mv "$APP/Contents/MacOS/droplet" "$APP/Contents/MacOS/$APP_NAME"
-  pb "Set :CFBundleExecutable $APP_NAME"
-fi
-pb "Set :CFBundleName $APP_NAME"
-pb "Add :CFBundleDisplayName string $APP_NAME"
-pb "Set :CFBundleIdentifier com.neighbor.shrinkdesignzip"
-pb "Set :CFBundleShortVersionString 1.0"
-pb "Add :NSHighResolutionCapable bool true"
-pb "Delete :CFBundleDocumentTypes"
-pb "Add :CFBundleDocumentTypes array"
-pb "Add :CFBundleDocumentTypes:0:CFBundleTypeName string 'ZIP archive'"
-pb "Add :CFBundleDocumentTypes:0:CFBundleTypeRole string Viewer"
-pb "Add :CFBundleDocumentTypes:0:LSItemContentTypes array"
-pb "Add :CFBundleDocumentTypes:0:LSItemContentTypes:0 string public.zip-archive"
-
-# ------------------------------------------------------------- icon ---------
-# Generate a simple icon so the app does not show the generic blank page.
-ICONSET="$(mktemp -d)/app.iconset"; mkdir -p "$ICONSET"
-SVG="$(mktemp).svg"
+# ------------------------------------------------------------------ icon ----
+TMPD="$(mktemp -d)"; ICONSET="$TMPD/app.iconset"; mkdir -p "$ICONSET"
+SVG="$TMPD/icon.svg"
 cat > "$SVG" <<'SVGEOF'
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
   <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
@@ -77,22 +107,17 @@ for s in 16 32 128 256 512; do
   sips -s format png "$SVG" --out "$ICONSET/icon_${s}x${s}.png" -Z $s >/dev/null 2>&1 || true
   sips -s format png "$SVG" --out "$ICONSET/icon_${s}x${s}@2x.png" -Z $((s*2)) >/dev/null 2>&1 || true
 done
-# osacompile names its icon applet.icns; overwrite that so the app picks it up.
-if iconutil -c icns "$ICONSET" -o "$ICONSET/../app.icns" 2>/dev/null; then
-  cp "$ICONSET/../app.icns" "$APP/Contents/Resources/applet.icns" 2>/dev/null || true
-  cp "$ICONSET/../app.icns" "$APP/Contents/Resources/droplet.icns" 2>/dev/null || true
-fi
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/app.icns" 2>/dev/null || true
+rm -rf "$TMPD"
 
-# Editing Info.plist and renaming the executable invalidates the ad-hoc
-# signature osacompile applied. An app with a BROKEN signature is refused
-# outright ("plist or signature have been modified") instead of showing the
-# ordinary "unidentified developer" prompt that a right-click -> Open clears,
-# so re-sign after every modification. Signing must come last.
+# --------------------------------------------------------------- signing ----
+# Ad-hoc sign LAST. An app whose signature does not match its contents is
+# refused outright ("plist or signature have been modified") rather than showing
+# the ordinary "unidentified developer" prompt that right-click -> Open clears.
 codesign --force --deep --sign - "$APP" 2>/dev/null || true
 
-# Strip the quarantine flag on the freshly built copy so a local test run does
-# not hit Gatekeeper. A copy sent to someone else is still quarantined on their
-# machine; INSTALL.md covers the one-time right-click -> Open step.
+# Local test runs should not hit Gatekeeper. A copy sent to someone else is
+# still quarantined on their machine; INSTALL.md covers that.
 xattr -cr "$APP" 2>/dev/null || true
 
 if codesign --verify --deep "$APP" 2>/dev/null; then
@@ -101,4 +126,5 @@ else
   echo "Signature: INVALID — the app will be refused rather than prompting" >&2
 fi
 
+echo "Architectures: $(lipo -archs "$APP/Contents/MacOS/$APP_NAME" 2>/dev/null || echo unknown)"
 echo "Built: $APP"
