@@ -48,7 +48,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 ARCHS=()
 BUILD_LOG="$DIST/.build.log"; : > "$BUILD_LOG"
 for arch in arm64 x86_64; do
-  if swiftc -O -parse-as-library -target "${arch}-apple-macos${MIN_MACOS}" \
+  # -strict-concurrency=complete matches what newer toolchains enforce by
+  # default, so a data race fails here rather than only on a CI runner.
+  if swiftc -O -parse-as-library -strict-concurrency=complete \
+       -target "${arch}-apple-macos${MIN_MACOS}" \
        -o "$DIST/.bin-$arch" "$ROOT/app/main.swift" >>"$BUILD_LOG" 2>&1; then
     ARCHS+=("$DIST/.bin-$arch")
   fi

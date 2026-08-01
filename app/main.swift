@@ -100,8 +100,16 @@ final class Model: ObservableObject {
         task.standardError = FileHandle.nullDevice
         do { try task.run() } catch { fail("Could not start the shrink script."); return }
 
+        // The Timer callback is not main-actor isolated, so capturing `self`
+        // directly is a data race under strict concurrency checking (the CI
+        // toolchain rejects it). MainActor.assumeIsolated is correct here
+        // because scheduledTimer fires on the run loop that scheduled it, and
+        // start() is main-actor isolated.
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.poll() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.poll()
+            }
         }
     }
 
