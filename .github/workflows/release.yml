@@ -44,10 +44,12 @@ jobs:
           case "$MINOR" in ''|*[!0-9]*) MINOR=0 ;; esac
           case "$PATCH" in ''|*[!0-9]*) PATCH=0 ;; esac
 
-          MSG="$(git log -1 --pretty=%B)"
-          if printf '%s' "$MSG" | grep -qiE '(^|[^a-z])major:'; then
+          # Only the SUBJECT line counts. Matching the whole message means any
+          # commit that merely discusses a "major:" bump triggers one.
+          SUBJECT="$(git log -1 --pretty=%s)"
+          if printf '%s' "$SUBJECT" | grep -qiE '^major:'; then
             MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0
-          elif printf '%s' "$MSG" | grep -qiE '(^|[^a-z])minor:'; then
+          elif printf '%s' "$SUBJECT" | grep -qiE '^minor:'; then
             MINOR=$((MINOR+1)); PATCH=0
           else
             PATCH=$((PATCH+1))

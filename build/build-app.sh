@@ -46,13 +46,20 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Build for whichever architectures the toolchain supports so the app runs on
 # both Apple Silicon and Intel.
 ARCHS=()
+BUILD_LOG="$DIST/.build.log"; : > "$BUILD_LOG"
 for arch in arm64 x86_64; do
   if swiftc -O -parse-as-library -target "${arch}-apple-macos${MIN_MACOS}" \
-       -o "$DIST/.bin-$arch" "$ROOT/app/main.swift" 2>/dev/null; then
+       -o "$DIST/.bin-$arch" "$ROOT/app/main.swift" >>"$BUILD_LOG" 2>&1; then
     ARCHS+=("$DIST/.bin-$arch")
   fi
 done
-[ ${#ARCHS[@]} -gt 0 ] || { echo "Swift build failed" >&2; exit 1; }
+if [ ${#ARCHS[@]} -eq 0 ]; then
+  # Show the compiler output rather than swallowing it; a silent "build failed"
+  # is impossible to diagnose on a CI runner.
+  echo "Swift build failed:" >&2
+  cat "$BUILD_LOG" >&2
+  exit 1
+fi
 
 if [ ${#ARCHS[@]} -gt 1 ]; then
   lipo -create "${ARCHS[@]}" -output "$APP/Contents/MacOS/$APP_NAME"
