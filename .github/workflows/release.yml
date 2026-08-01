@@ -1,0 +1,167 @@
+name: Release
+
+# Every push to main cuts a new patch release. The version is derived from the
+# latest existing tag, so nothing needs to be bumped by hand.
+#
+# To bump the minor or major version instead, put "minor:" or "major:" anywhere
+# in the commit message.
+on:
+  push:
+    branches: [main]
+  # Allows re-running a release by hand from the Actions tab.
+  workflow_dispatch:
+
+# Releases must not run concurrently: two jobs would compute the same next tag
+# and the loser would fail on a duplicate.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # required to create tags and releases
+
+jobs:
+  release:
+    # macOS runner: the build needs swiftc, sips, iconutil, ditto, and codesign.
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # need full history for tags
+
+      - name: Work out the next version
+        id: version
+        run: |
+          set -euo pipefail
+          LATEST="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+          [ -n "$LATEST" ] || LATEST="v0.0.0"
+          V="${LATEST#v}"
+          MAJOR="${V%%.*}"; REST="${V#*.}"
+          MINOR="${REST%%.*}"; PATCH="${REST#*.}"
+          # Non-numeric parts (e.g. from a -beta tag) fall back to 0.
+          case "$MAJOR" in ''|*[!0-9]*) MAJOR=0 ;; esac
+          case "$MINOR" in ''|*[!0-9]*) MINOR=0 ;; esac
+          case "$PATCH" in ''|*[!0-9]*) PATCH=0 ;; esac
+
+          MSG="$(git log -1 --pretty=%B)"
+          if printf '%s' "$MSG" | grep -qiE '(^|[^a-z])major:'; then
+            MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0
+          elif printf '%s' "$MSG" | grep -qiE '(^|[^a-z])minor:'; then
+            MINOR=$((MINOR+1)); PATCH=0
+          else
+            PATCH=$((PATCH+1))
+          fi
+
+          TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "previous=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Releasing $LATEST -> $TAG"
+
+      - name: Build the app
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: ./build/build-app.sh
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          # ditto, not zip: a plain zip does not preserve a signed .app's
+          # resource forks and produces a bundle that fails codesign.
+          ditto -c -k --sequesterRsrc --keepParent \
+            "dist/Shrink Design Zip.app" dist/ShrinkDesignZip.zip
+          ls -lh dist/ShrinkDesignZip.zip
+
+      - name: Verify the archive round-trips
+        run: |
+          set -euo pipefail
+          # Unpack what will actually be published and confirm it still
+          # verifies, so a corrupt asset can never reach a user.
+          mkdir -p /tmp/verify
+          ditto -x -k dist/ShrinkDesignZip.zip /tmp/verify
+          APP="$(find /tmp/verify -maxdepth 2 -name '*.app' -print -quit)"
+          [ -n "$APP" ] || { echo "no .app inside the archive" >&2; exit 1; }
+          codesign --verify --deep "$APP"
+          # The bundled optimizer must be present and executable, or the app
+          # installs fine and then fails on first use.
+          test -x "$APP/Contents/Resources/shrink-design-zip.sh"
+          test -f "$APP/Contents/Resources/pngquant.py"
+          echo "Version: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+          echo "Archs:   $(lipo -archs "$APP/Contents/MacOS/Shrink Design Zip")"
+
+      - name: Smoke-test the optimizer
+        run: |
+          set -euo pipefail
+          # Build a tiny fake export: one referenced image, one orphan, and a
+          # duplicate. Proves the shipped script actually runs on the runner.
+          mkdir -p /tmp/fixture/assets
+          /usr/bin/python3 - <<'PY'
+          import zlib, struct
+          def png(path, w, h, rgb):
+              raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+              def ch(t, d):
+                  return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+              open(path, "wb").write(
+                  b"\x89PNG\r\n\x1a\n"
+                  + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                  + ch(b"IDAT", zlib.compress(raw, 9)) + ch(b"IEND", b""))
+          # used.png is unique so it must survive verbatim. dup-a/dup-b are
+          # identical to each other but not to used.png, so exactly one of the
+          # pair is removed and its references repointed.
+          png("/tmp/fixture/assets/used.png", 900, 900, (200, 80, 40))
+          png("/tmp/fixture/assets/orphan.png", 900, 900, (10, 90, 200))
+          png("/tmp/fixture/assets/dup-a.png", 900, 900, (30, 160, 90))
+          png("/tmp/fixture/assets/dup-b.png", 900, 900, (30, 160, 90))
+          open("/tmp/fixture/index.html", "w").write(
+              '<img src="assets/used.png">'
+              '<img src="assets/dup-a.png"><img src="assets/dup-b.png">')
+          PY
+          (cd /tmp/fixture && zip -qr /tmp/fixture.zip .)
+
+          APP="$(find /tmp/verify -maxdepth 2 -name '*.app' -print -quit)"
+          PROGRESS=/tmp/progress.txt \
+            bash "$APP/Contents/Resources/shrink-design-zip.sh" /tmp/fixture.zip 1 || true
+
+          test -f /tmp/fixture-optimized.zip || { echo "no output produced" >&2; exit 1; }
+          grep -q '^done ' /tmp/progress.txt || { echo "no done event emitted" >&2; exit 1; }
+          # The orphan must be gone and the referenced image must survive.
+          ditto -x -k /tmp/fixture-optimized.zip /tmp/out
+          find /tmp/out -name 'orphan.*' | grep -q . && { echo "orphan survived" >&2; exit 1; }
+          find /tmp/out -name 'used.*'   | grep -q . || { echo "referenced image lost" >&2; exit 1; }
+          # Exactly one of the identical pair should remain.
+          N="$(find /tmp/out -name 'dup-*' | wc -l | tr -d ' ')"
+          [ "$N" = "1" ] || { echo "expected 1 deduped file, found $N" >&2; exit 1; }
+          # Every reference in the html must still resolve.
+          grep -oE 'assets/[A-Za-z0-9_.-]+' /tmp/out/index.html | sort -u | while read -r r; do
+            test -f "/tmp/out/$r" || { echo "broken reference: $r" >&2; exit 1; }
+          done
+          echo "Smoke test passed"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PREV: ${{ steps.version.outputs.previous }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Shrinks Claude Design export ZIPs for upload."
+            echo
+            echo "## Install"
+            echo '```'
+            echo "curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash"
+            echo '```'
+            echo
+            echo "## Changes"
+            if git rev-parse "$PREV" >/dev/null 2>&1; then
+              git log --no-merges --pretty='- %s' "$PREV"..HEAD
+            else
+              git log --no-merges --pretty='- %s' -10
+            fi
+          } > /tmp/notes.md
+
+          gh release create "$TAG" dist/ShrinkDesignZip.zip \
+            --title "$TAG" --notes-file /tmp/notes.md
+
+          echo "### Released $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash\`" >> "$GITHUB_STEP_SUMMARY"

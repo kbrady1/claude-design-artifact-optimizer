@@ -20,6 +20,18 @@ DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 MIN_MACOS="13.0"
 
+# Version stamped into the bundle. release.sh and CI pass the tag; a plain local
+# build falls back to the newest tag, then to 0.0.0.
+VERSION="${VERSION:-}"
+if [ -z "$VERSION" ]; then
+  VERSION="$(git -C "$ROOT" describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")"
+fi
+VERSION="${VERSION#v}"
+# CFBundleVersion must be dot-separated digits, so strip any suffix such as
+# "-beta.1". CFBundleShortVersionString keeps the full string.
+BUILD_VERSION="$(printf '%s' "$VERSION" | sed -E 's/[^0-9.].*$//; s/\.+$//')"
+[ -n "$BUILD_VERSION" ] || BUILD_VERSION="0.0.0"
+
 for f in shrink-design-zip.sh build/pngquant.py app/main.swift; do
   [ -f "$ROOT/$f" ] || { echo "missing $f" >&2; exit 1; }
 done
@@ -64,8 +76,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>$APP_NAME</string>
   <key>CFBundleDisplayName</key><string>$APP_NAME</string>
   <key>CFBundleIdentifier</key><string>com.kbrady1.shrinkdesignzip</string>
-  <key>CFBundleVersion</key><string>2.0</string>
-  <key>CFBundleShortVersionString</key><string>2.0</string>
+  <key>CFBundleVersion</key><string>$BUILD_VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>$APP_NAME</string>
   <key>CFBundleIconFile</key><string>app</string>

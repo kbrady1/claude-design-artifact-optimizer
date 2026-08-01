@@ -50,7 +50,7 @@ gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 && \
 printf "\n${BLD}Releasing %s${RST}\n\n" "$TAG"
 
 printf "Building…\n"
-"$ROOT/build/build-app.sh" >/dev/null 2>&1 || die "Build failed. Run ./build/build-app.sh to see why."
+VERSION="$TAG" "$ROOT/build/build-app.sh" >/dev/null 2>&1 || die "Build failed. Run ./build/build-app.sh to see why."
 APP="$ROOT/dist/$APP_NAME.app"
 [ -d "$APP" ] || die "Build produced no app."
 codesign --verify --deep "$APP" 2>/dev/null || die "Built app has an invalid signature."

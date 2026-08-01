@@ -35,14 +35,31 @@ resolve.
 ./build/build-app.sh      # writes dist/Shrink Design Zip.app
 ```
 
-### Cut a release
+### Releases
+
+**Merging to `main` publishes a release automatically.** The workflow
+(`.github/workflows/release.yml`) bumps the patch version from the latest tag,
+builds on a macOS runner, verifies, and publishes. Nothing to bump by hand.
+
+To bump the minor or major version instead, put `minor:` or `major:` in the
+commit message:
+
+```
+minor: add WebP output
+```
+
+The workflow builds, packages with `ditto` (a plain `zip` corrupts a signed
+`.app`), unpacks its own archive to confirm it still passes `codesign`, and
+runs the optimizer against a generated fixture — checking that orphans are
+removed, duplicates collapse to one file, and every reference still resolves.
+A failure at any point means no release is published.
+
+To release by hand (or from a machine without CI):
 
 ```bash
 ./build/release.sh v2.0.1
 ```
 
-Builds, packages with `ditto` (a plain `zip` corrupts a signed `.app`),
-verifies the archive round-trips and still passes `codesign`, then publishes.
 `install.sh` always fetches `/releases/latest`, so publishing is the only step
 needed for users to get the new version.
 
@@ -69,7 +86,8 @@ distinguishing breakage it caused from breakage already present in the export.
 | `build/pngquant.py` | PNG palette quantizer (see below). |
 | `app/main.swift` | SwiftUI window: drop zone, progress, save dialog. |
 | `build/build-app.sh` | Compiles the app and assembles the bundle. |
-| `build/release.sh` | Builds, verifies, and publishes a GitHub release. |
+| `build/release.sh` | Manual release: build, verify, publish. |
+| `.github/workflows/release.yml` | Auto-release on merge to `main`. |
 | `install.sh` | What the curl one-liner runs. |
 
 ### Progress protocol
