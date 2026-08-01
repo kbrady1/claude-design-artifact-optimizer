@@ -63,7 +63,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>$APP_NAME</string>
   <key>CFBundleDisplayName</key><string>$APP_NAME</string>
-  <key>CFBundleIdentifier</key><string>com.neighbor.shrinkdesignzip</string>
+  <key>CFBundleIdentifier</key><string>com.kbrady1.shrinkdesignzip</string>
   <key>CFBundleVersion</key><string>2.0</string>
   <key>CFBundleShortVersionString</key><string>2.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>

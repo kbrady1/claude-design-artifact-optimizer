@@ -7,11 +7,14 @@ Ships as a Mac app with a drop zone, live progress, and a save dialog — and as
 a CLI. Running it needs nothing installed: only `sips`, `zip`, and the system
 `python3`. (Building the app needs Swift; running it does not.)
 
-## For designers
+## Install
 
-See **[INSTALL.md](INSTALL.md)**. Short version: drag `Shrink Design Zip.app`
-to Applications, right-click → Open it once, then drop any design ZIP into its
-window.
+```bash
+curl -fsSL https://raw.githubusercontent.com/kbrady1/claude-design-artifact-optimizer/main/install.sh | bash
+```
+
+Installs to `~/Applications` and opens it. Re-run to update. See
+**[INSTALL.md](INSTALL.md)** for the designer-facing walkthrough.
 
 ## For engineers
 
@@ -31,6 +34,17 @@ resolve.
 ```bash
 ./build/build-app.sh      # writes dist/Shrink Design Zip.app
 ```
+
+### Cut a release
+
+```bash
+./build/release.sh v2.0.1
+```
+
+Builds, packages with `ditto` (a plain `zip` corrupts a signed `.app`),
+verifies the archive round-trips and still passes `codesign`, then publishes.
+`install.sh` always fetches `/releases/latest`, so publishing is the only step
+needed for users to get the new version.
 
 ## How it works
 
@@ -55,6 +69,8 @@ distinguishing breakage it caused from breakage already present in the export.
 | `build/pngquant.py` | PNG palette quantizer (see below). |
 | `app/main.swift` | SwiftUI window: drop zone, progress, save dialog. |
 | `build/build-app.sh` | Compiles the app and assembles the bundle. |
+| `build/release.sh` | Builds, verifies, and publishes a GitHub release. |
+| `install.sh` | What the curl one-liner runs. |
 
 ### Progress protocol
 
@@ -99,14 +115,17 @@ Two details worth preserving if this is ever modified:
 
 ## Distribution
 
-The app is ad-hoc signed, so a copy someone downloads or receives over Slack is
-quarantined and needs one right-click → Open. That step is documented in
-INSTALL.md.
+The app is ad-hoc signed, not notarized. `install.sh` clears the quarantine
+flag after installing, so users never see the "unidentified developer" prompt —
+running the installer is the same trust decision that dialog asks for.
+
+Someone who downloads the release zip **manually** (rather than via the
+installer) still gets that prompt and needs one right-click → Open.
 
 `build-app.sh` re-signs after patching `Info.plist`. This matters: an app whose
-signature does not match its plist is refused outright with *"plist or
+signature does not match its contents is refused outright with *"plist or
 signature have been modified"*, rather than showing the ordinary prompt that
 right-click → Open clears.
 
-To remove the prompt entirely, sign and notarize with an Apple Developer ID —
-commands are at the bottom of INSTALL.md.
+To make manual downloads prompt-free too, sign and notarize with an Apple
+Developer ID — commands are at the bottom of INSTALL.md.

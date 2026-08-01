@@ -7,24 +7,20 @@ Nothing to install. It uses tools that are already on every Mac.
 
 ---
 
-## Setup (once, about 30 seconds)
+## Install (one line)
 
-**1. Move the app to Applications**
+Open **Terminal** (press `Cmd+Space`, type "Terminal", hit Return) and paste
+this:
 
-Drag `Shrink Design Zip.app` into your **Applications** folder.
+```
+curl -fsSL https://raw.githubusercontent.com/kbrady1/claude-design-artifact-optimizer/main/install.sh | bash
+```
 
-**2. Open it the first time**
+That downloads the app, puts it in `~/Applications`, and opens it. Takes about
+ten seconds. There is no second step — no dragging, and no
+"unidentified developer" warning to click through.
 
-macOS blocks apps that did not come from the App Store, so the first launch
-needs one extra step:
-
-> **Right-click** (or Control-click) the app → choose **Open** → click **Open**
-> in the dialog.
-
-You only do this once. After that it opens like any other app.
-
-If you double-click it by mistake and see *"cannot be opened because the
-developer cannot be verified"*, just click **OK** and follow the step above.
+To update later, run the same command again.
 
 ---
 
